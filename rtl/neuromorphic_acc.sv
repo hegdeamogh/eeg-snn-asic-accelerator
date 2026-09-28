@@ -3,17 +3,17 @@
 module neuromorphic_acc (
     input  wire        clk_50mhz,
     input  wire        rst_n,
-    
+
     // ADC Interface (4 channels, 12-bit each)
     input  wire [11:0] adc_ch0,
     input  wire [11:0] adc_ch1,
     input  wire [11:0] adc_ch2,
     input  wire [11:0] adc_ch3,
     input  wire        adc_valid,        // Strobe at 256 Hz
-    
+
     // Seizure Output
-    output reg         seizure_detect,
-    
+    output wire        seizure_detect,
+
     // Debug outputs
     output wire [7:0]  debug_firing_rate,
     output wire        debug_hidden_spikes,
@@ -30,8 +30,17 @@ module neuromorphic_acc (
     wire        en_hidden;
     wire        en_output;
     wire        en_weights;
-    
-    // ========== 1. SPIKE ENCODER ==========
+
+    reg [4:0] valid_pipe;
+    always @(posedge clk_50mhz or negedge rst_n) begin
+        if (!rst_n)
+            valid_pipe <= 5'd0;
+        else
+            valid_pipe <= {valid_pipe[3:0], adc_valid};
+    end
+    wire sample_valid = valid_pipe[4];
+
+ 
     spike_encoder u_encoder (
         .clk         (clk_50mhz),
         .rst_n       (rst_n),
@@ -42,8 +51,8 @@ module neuromorphic_acc (
         .spike_onehot(spike_onehot),
         .active_idx  (active_idx)
     );
-    
-    // ========== 2. CLOCK GATING CONTROLLER ==========
+
+
     clock_gating_ctrl u_clk_gate (
         .clk          (clk_50mhz),
         .rst_n        (rst_n),
@@ -53,22 +62,22 @@ module neuromorphic_acc (
         .en_snn_output(en_output),
         .en_mem_weights(en_weights)
     );
-    
-    // ========== 3. HIDDEN LAYER (8 LIF neurons) ==========
+
+
     lif_hidden_layer u_hidden (
         .clk         (clk_50mhz),
         .rst_n       (rst_n),
         .spike_valid (en_hidden),
         .active_idx  (active_idx),
-        .weights     (),  // Placeholder: tie to constants
+        .weights     (512'd0),  // Placeholder: real weight values TBD
         .membrane    (hidden_membrane),
         .threshold   ({16'h100, 16'h100, 16'h100, 16'h100, 16'h100, 16'h100, 16'h100, 16'h100}),  // 1.0
         .decay       ({16'h0CC, 16'h0CC, 16'h0CC, 16'h0CC, 16'h0CC, 16'h0CC, 16'h0CC, 16'h0CC}),  // 0.8
         .membrane_out(hidden_membrane),
         .spikes_out  (hidden_spikes)
     );
-    
-    // ========== 4. OUTPUT LAYER (1 LIF neuron) ==========
+
+ 
     lif_output_neuron u_output (
         .clk         (clk_50mhz),
         .rst_n       (rst_n),
@@ -81,17 +90,17 @@ module neuromorphic_acc (
         .membrane_out(output_membrane),
         .spike_out   (output_spike)
     );
-    
-    // ========== 5. SEIZURE DECISION ==========
+
+
     seizure_decision u_decision (
         .clk           (clk_50mhz),
         .rst_n         (rst_n),
+        .sample_valid  (sample_valid),
         .output_spike  (output_spike),
         .seizure_detect(seizure_detect),
         .firing_rate   (debug_firing_rate)
     );
-    
-    // Debug assignments
+
     assign debug_hidden_spikes = |hidden_spikes;
     assign debug_output_spike = output_spike;
 
