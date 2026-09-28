@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module clock_gating_ctrl (
     input  wire        clk,
     input  wire        rst_n,
@@ -14,13 +16,8 @@ module clock_gating_ctrl (
             en_snn_output <= 1'b0;
             en_mem_weights <= 1'b0;
         end else begin
-            //Enable hidden layer when input spikes present
             en_snn_hidden <= |spike_onehot;
-            
-            //Enable output layer when hidden spikes present
             en_snn_output <= |hidden_spikes;
-            
-            //Enable memory when either layer active
             en_mem_weights <= en_snn_hidden | en_snn_output;
         end
     end
