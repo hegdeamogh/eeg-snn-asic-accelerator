@@ -1,62 +1,36 @@
 `timescale 1ns/1ps
-
-module spike_encoder (
+module spike_encoder #(
+    parameter [47:0] LEVEL_MIN  = 48'd0,                       // {ch3..ch0}, 12 bit each
+    parameter [15:0] STEP_SHIFT = {4'd8, 4'd8, 4'd8, 4'd8}     // log2(step) per channel
+)(
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        adc_valid,
-    input  wire [47:0] adc_in,           // {ch3, ch2, ch1, ch0}
-    input  wire [47:0] level_min,        // {ch3_min, ch2_min, ch1_min, ch0_min}
-    input  wire [47:0] level_step,       // {ch3_step, ch2_step, ch1_step, ch0_step}
-    output reg  [63:0] spike_onehot,
-    output reg  [5:0]  active_idx [3:0]
+    input  wire        sample_valid,   // 1-cycle pulse per ADC sample
+    input  wire [47:0] adc_in,         // {ch3, ch2, ch1, ch0}
+    output reg         enc_valid,      // sample_valid delayed 1 cycle, aligned with gidx
+    output reg  [23:0] gidx            // {ch3,ch2,ch1,ch0}, 6-bit global input index each
 );
-
-    wire [11:0] adc_ch  [3:0];
-    wire [11:0] min_ch  [3:0];
-    wire [11:0] step_ch [3:0];
-
-    assign adc_ch[0] = adc_in[11:0];
-    assign adc_ch[1] = adc_in[23:12];
-    assign adc_ch[2] = adc_in[35:24];
-    assign adc_ch[3] = adc_in[47:36];
-
-    assign min_ch[0] = level_min[11:0];
-    assign min_ch[1] = level_min[23:12];
-    assign min_ch[2] = level_min[35:24];
-    assign min_ch[3] = level_min[47:36];
-
-    assign step_ch[0] = level_step[11:0];
-    assign step_ch[1] = level_step[23:12];
-    assign step_ch[2] = level_step[35:24];
-    assign step_ch[3] = level_step[47:36];
-
-    integer i;
-    reg [3:0]  level_idx   [3:0];   // combinational per cycle, no longer a separate register stage
-    reg [63:0] onehot_next;
+    wire [23:0] gidx_c;
+    genvar c;
+    generate
+        for (c = 0; c < 4; c = c + 1) begin : g_ch
+            localparam [1:0] CH = c;
+            wire [11:0] x   = adc_in[12*c +: 12];
+            wire [11:0] mn  = LEVEL_MIN[12*c +: 12];
+            wire [11:0] sh  = (x - mn) >> STEP_SHIFT[4*c +: 4];
+            wire [3:0]  lvl = (x < mn)      ? 4'd0  :
+                              (sh > 12'd15) ? 4'd15 : sh[3:0];     // clamp, no aliasing
+            assign gidx_c[6*c +: 6] = {CH, lvl};                    // 16*ch + level
+        end
+    endgenerate
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            spike_onehot  <= 64'd0;
-            active_idx[0] <= 6'd0;
-            active_idx[1] <= 6'd0;
-            active_idx[2] <= 6'd0;
-            active_idx[3] <= 6'd0;
-        end else if (adc_valid) begin
-            onehot_next = 64'd0;
-            for (i = 0; i < 4; i = i + 1) begin
-
-                if (adc_ch[i] < min_ch[i])
-                    level_idx[i] = 4'd0;
-                else if (((adc_ch[i] - min_ch[i]) / step_ch[i]) > 15)
-                    level_idx[i] = 4'd15;
-                else
-                    level_idx[i] = (adc_ch[i] - min_ch[i]) / step_ch[i];
-
-                onehot_next[16*i + level_idx[i]] = 1'b1;
-                active_idx[i] <= {2'b00, level_idx[i]};
-            end
-            spike_onehot <= onehot_next;
+            enc_valid <= 1'b0;
+            gidx      <= 24'd0;
+        end else begin
+            enc_valid <= sample_valid;
+            if (sample_valid) gidx <= gidx_c;
         end
     end
-
 endmodule
