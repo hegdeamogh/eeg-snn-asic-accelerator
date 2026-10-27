@@ -1,44 +1,45 @@
 `timescale 1ns/1ps
-
 module lif_hidden_layer (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        spike_valid,
-    input  wire [5:0]  active_idx [3:0],
-    input  wire [4095:0] weights,         // 64x8 weights (8-bit each) - not yet wired in
-    input  wire [15:0] membrane [7:0],
-    input  wire [15:0] threshold [7:0],
-    input  wire [15:0] decay [7:0],
-    output reg  [15:0] membrane_out [7:0],
-    output reg  [7:0]  spikes_out
+    input  wire        step,          // one pulse per ADC sample
+    input  wire [23:0] gidx,          // 4 active global input indices
+    output reg         valid,         // step delayed 1 cycle, aligned with spikes_out
+    output reg  [7:0]  spikes_out     // 1-cycle pulses
 );
+`include "snn_weights.vh"
 
+    reg signed [15:0] v [0:7];
+    reg signed [17:0] acc;
     integer n;
-    reg [15:0] decayed       [7:0];
-    reg [15:0] input_current [7:0];
-    reg [15:0] accumulated   [7:0];
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            for (n = 0; n < 8; n = n + 1) begin
-                membrane_out[n] <= 16'd0;
-                spikes_out[n]   <= 1'b0;
-            end
+            for (n = 0; n < 8; n = n + 1) v[n] <= 16'sd0;
+            spikes_out <= 8'd0;
+            valid      <= 1'b0;
         end else begin
-            for (n = 0; n < 8; n = n + 1) begin
-                decayed[n]       = (membrane[n] * decay[n]) >>> 8;
-                input_current[n] = spike_valid ? 16'h066 : 16'd0;  // Placeholder weight
-                accumulated[n]   = decayed[n] + input_current[n];
-
-                if (accumulated[n] >= threshold[n]) begin
-                    membrane_out[n] <= accumulated[n] - threshold[n];
-                    spikes_out[n]   <= 1'b1;
-                end else begin
-                    membrane_out[n] <= accumulated[n];
-                    spikes_out[n]   <= 1'b0;
+            valid <= step;
+            if (step) begin
+                for (n = 0; n < 8; n = n + 1) begin
+                    acc = (v[n] - (v[n] >>> HID_LEAK_SHIFT))        // shift-add leak
+                        + w_hid(gidx[5:0],   n[2:0])
+                        + w_hid(gidx[11:6],  n[2:0])
+                        + w_hid(gidx[17:12], n[2:0])
+                        + w_hid(gidx[23:18], n[2:0]);
+                    if (acc >  18'sd32767)  acc =  18'sd32767;      // saturate to 16 bit
+                    if (acc < -18'sd32768)  acc = -18'sd32768;
+                    if (acc >= HID_THRESH) begin
+                        v[n]          <= acc[15:0] - HID_THRESH;    // soft reset
+                        spikes_out[n] <= 1'b1;
+                    end else begin
+                        v[n]          <= acc[15:0];
+                        spikes_out[n] <= 1'b0;
+                    end
                 end
+            end else begin
+                spikes_out <= 8'd0;
             end
         end
     end
-
 endmodule
